@@ -14,8 +14,8 @@ Production multi-instance Cloudflare WARP manager + high-RPS HTTP/SOCKS5 load ba
 
 | Port | Protocol |
 |------|----------|
-| `1080` | SOCKS5 (WARP-backed) |
-| `8080` | HTTP CONNECT / absolute-form proxy |
+| `11080` | SOCKS5 (WARP-backed) |
+| `18080` | HTTP CONNECT / absolute-form proxy |
 | `9090` | Admin: `/healthz` `/readyz` `/metrics` `/backends` |
 
 ## Modes
@@ -32,8 +32,8 @@ Does not spawn WARP. Balances across existing SOCKS backends at `base_port + i` 
 docker compose up -d --build
 
 curl http://127.0.0.1:9090/readyz
-curl --socks5-hostname user:pass@127.0.0.1:1080 https://cloudflare.com/cdn-cgi/trace
-curl -x http://user:pass@127.0.0.1:8080 https://cloudflare.com/cdn-cgi/trace
+curl --socks5-hostname user:pass@127.0.0.1:11080 https://cloudflare.com/cdn-cgi/trace
+curl -x http://user:pass@127.0.0.1:18080 https://cloudflare.com/cdn-cgi/trace
 ```
 
 ## Standalone (Windows attach)

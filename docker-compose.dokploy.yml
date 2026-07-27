@@ -7,8 +7,8 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "1080:1080"
-      - "8080:8080"
+      - "11080:11080"
+      - "18080:18080"
       - "9090:9090"
     environment:
       MULTI_WARP_MODE: managed

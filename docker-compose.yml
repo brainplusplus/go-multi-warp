@@ -7,8 +7,8 @@ services:
     container_name: go-multi-warp
     restart: unless-stopped
     ports:
-      - "1080:1080"   # SOCKS5
-      - "8080:8080"   # HTTP proxy
+      - "11080:11080" # SOCKS5
+      - "18080:18080" # HTTP proxy
       - "9090:9090"   # admin / health / metrics
     environment:
       MULTI_WARP_MODE: managed

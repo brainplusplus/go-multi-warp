@@ -38,7 +38,7 @@ ENV PROXY_PASS=pass
 ENV PROXY_MAX_CONN=500
 ENV RUST_LOG=info
 
-EXPOSE 1080 8080 9090
+EXPOSE 11080 18080 9090
 
 HEALTHCHECK --interval=15s --timeout=5s --start-period=180s --retries=5 \
   CMD curl -fsS http://127.0.0.1:9090/healthz || exit 1

@@ -146,7 +146,7 @@ func (d *Duration) UnmarshalYAML(value *yaml.Node) error {
 
 func Default() Config {
 	return Config{
-		Listen:      Listen{Socks5: "0.0.0.0:1080", HTTP: "0.0.0.0:8080", Admin: "0.0.0.0:9090"},
+		Listen:      Listen{Socks5: "0.0.0.0:11080", HTTP: "0.0.0.0:18080", Admin: "0.0.0.0:9090"},
 		Mode:        ModeAttach,
 		Instances:   5,
 		BasePort:    40000,
