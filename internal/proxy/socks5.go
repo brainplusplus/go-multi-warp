@@ -146,7 +146,7 @@ func (s *Socks5Server) handle(ctx context.Context, conn net.Conn) {
 	sticky := pool.StickyKey(peer)
 	upstream, backendLease, err := DialViaSocks(ctx, s.state, host, port, sticky)
 	if err != nil {
-		s.log.Debug("dial failed",
+		s.log.Info("dial failed",
 			zap.String("peer", peer.String()),
 			zap.String("target", net.JoinHostPort(host, fmt.Sprint(port))),
 			zap.Error(err))

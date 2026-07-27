@@ -189,7 +189,11 @@ func readSocksAddr(r *bufio.Reader, atyp byte) (string, int, error) {
 		if _, err := io.ReadFull(r, lb); err != nil {
 			return "", 0, err
 		}
-		host = string(lb)
+		name := make([]byte, int(lb[0]))
+		if _, err := io.ReadFull(r, name); err != nil {
+			return "", 0, err
+		}
+		host = string(name)
 	case 0x04:
 		b := make([]byte, 16)
 		if _, err := io.ReadFull(r, b); err != nil {
