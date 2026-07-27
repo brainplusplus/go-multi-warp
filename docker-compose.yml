@@ -1,0 +1,32 @@
+# go-multi-warp production compose (Dokploy)
+# Managed mode: spawns warp-svc inside container + high-RPS balancer
+services:
+  go-multi-warp:
+    build: .
+    image: go-multi-warp:local
+    container_name: go-multi-warp
+    restart: unless-stopped
+    ports:
+      - "1080:1080"   # SOCKS5
+      - "8080:8080"   # HTTP proxy
+      - "9090:9090"   # admin / health / metrics
+    environment:
+      MULTI_WARP_MODE: managed
+      WARP_INSTANCES: "5"
+      MULTI_WARP_INSTANCES: "5"
+      WARP_CONNECT_TIMEOUT: "60"
+      PROXY_USER: user
+      PROXY_PASS: pass
+      PROXY_MAX_CONN: "500"
+      RUST_LOG: info
+    volumes:
+      - go-multi-warp-data:/var/lib/cloudflare-warp
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:9090/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 180s
+
+volumes:
+  go-multi-warp-data:

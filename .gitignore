@@ -1,0 +1,8 @@
+/go-multi-warp
+/go-multi-warp.exe
+/go-multi-warp-linux-amd64
+*.log
+*.exe
+config.local.yaml
+.DS_Store
+/tmp/

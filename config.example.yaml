@@ -1,0 +1,46 @@
+listen:
+  socks5: "0.0.0.0:1080"
+  http: "0.0.0.0:8080"
+  admin: "0.0.0.0:9090"
+
+auth:
+  username: "user"
+  password: "pass"
+
+# On Windows host: attach to Docker multi-warp internals only works inside same network.
+# Default local smoke: attach mode with explicit backends or base_port instances.
+mode: attach
+instances: 5
+base_port: 40000
+connect_timeout_ms: 5000
+probe_interval_ms: 5000
+probe_url: "https://cloudflare.com/cdn-cgi/trace"
+probe_require_warp: true
+
+pool:
+  strategy: least_conn
+  max_fails: 3
+  fail_timeout_ms: 15000
+  open_after_ms: 10000
+  max_inflight_per_backend: 512
+  sticky_ttl_ms: 300000
+
+limits:
+  max_conn_global: 20000
+  max_conn_per_ip: 500
+  max_rps_per_ip: 0
+  dial_timeout_ms: 8000
+  io_timeout_ms: 120000
+
+control:
+  warp_connect_timeout_sec: 60
+  start_stagger_ms: 3000
+  reconnect_after_fails: 2
+  hard_restart_after_fails: 6
+  license_keys: []
+  data_root: "/var/lib/cloudflare-warp"
+  runtime_root: "/run/multi-warp"
+
+logging:
+  level: "info"
+  json: false
