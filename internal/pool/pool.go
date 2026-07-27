@@ -257,7 +257,7 @@ type ConnLimiter struct {
 	global    atomic.Int64
 	maxGlobal int64
 	maxPerIP  int64
-	perIP     sync.Map // net.IP -> *atomic.Int64
+	perIP     sync.Map // string IP -> *atomic.Int64
 }
 
 func NewConnLimiter(maxGlobal, maxPerIP int) *ConnLimiter {
@@ -275,14 +275,18 @@ func (cl *ConnLimiter) Acquire(peer net.Addr) (*ConnLease, error) {
 		return nil, ErrGlobalConnLimit
 	}
 
+	if ip == "" {
+		// still count global; skip per-IP tracking
+		return &ConnLease{limiter: cl, ip: ""}, nil
+	}
+
 	var counter *atomic.Int64
 	if v, ok := cl.perIP.Load(ip); ok {
 		counter = v.(*atomic.Int64)
 	} else {
 		counter = &atomic.Int64{}
-		actual, loaded := cl.perIP.LoadOrStore(ip, counter)
+		actual, _ := cl.perIP.LoadOrStore(ip, counter)
 		counter = actual.(*atomic.Int64)
-		_ = loaded
 	}
 	n := counter.Add(1)
 	if cl.maxPerIP > 0 && n > cl.maxPerIP {
@@ -296,7 +300,7 @@ func (cl *ConnLimiter) Acquire(peer net.Addr) (*ConnLease, error) {
 
 type ConnLease struct {
 	limiter *ConnLimiter
-	ip      net.IP
+	ip      string
 }
 
 func (cl *ConnLease) Release() {
@@ -304,30 +308,36 @@ func (cl *ConnLease) Release() {
 		return
 	}
 	cl.limiter.global.Add(-1)
+	if cl.ip == "" {
+		return
+	}
 	if v, ok := cl.limiter.perIP.Load(cl.ip); ok {
 		v.(*atomic.Int64).Add(-1)
 	}
 }
 
-func peerKey(peer net.Addr) net.IP {
+func peerKey(peer net.Addr) string {
 	if peer == nil {
-		return nil
+		return ""
 	}
 	host, _, err := net.SplitHostPort(peer.String())
 	if err != nil {
-		return nil
+		return peer.String()
 	}
-	return net.ParseIP(host)
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String()
+	}
+	return host
 }
 
 // StickyKey derives a stable sticky key from peer IP.
 func StickyKey(peer net.Addr) uint64 {
 	ip := peerKey(peer)
-	if ip == nil {
+	if ip == "" {
 		return 0
 	}
 	h := fnv.New64a()
-	h.Write([]byte(ip.String()))
+	h.Write([]byte(ip))
 	return h.Sum64()
 }
 
