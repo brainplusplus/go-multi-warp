@@ -12,11 +12,18 @@ services:
       - "9090:9090"
     environment:
       MULTI_WARP_MODE: managed
-      WARP_INSTANCES: "5"
-      MULTI_WARP_INSTANCES: "5"
+      WARP_INSTANCES: "10"
+      MULTI_WARP_INSTANCES: "10"
+      MULTI_WARP_STRATEGY: round_robin
+      MULTI_WARP_SOCKS: "0.0.0.0:11080"
+      MULTI_WARP_HTTP: "0.0.0.0:18080"
+      MULTI_WARP_ADMIN: "0.0.0.0:9090"
       PROXY_USER: user
       PROXY_PASS: pass
-      PROXY_MAX_CONN: "500"
+      PROXY_MAX_CONN: "1000"
+      # Comma-separated, 1 key per instance for unique IPv4
+      WARP_LICENSE_KEYS: ${WARP_LICENSE_KEYS:-}
+      MULTI_WARP_FORCE_REREGISTER: ${MULTI_WARP_FORCE_REREGISTER:-false}
       RUST_LOG: info
     volumes:
       - go-multi-warp-data:/var/lib/cloudflare-warp

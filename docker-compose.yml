@@ -12,12 +12,15 @@ services:
       - "9090:9090"   # admin / health / metrics
     environment:
       MULTI_WARP_MODE: managed
-      WARP_INSTANCES: "5"
-      MULTI_WARP_INSTANCES: "5"
+      WARP_INSTANCES: "10"
+      MULTI_WARP_INSTANCES: "10"
+      MULTI_WARP_STRATEGY: round_robin
       WARP_CONNECT_TIMEOUT: "60"
       PROXY_USER: user
       PROXY_PASS: pass
-      PROXY_MAX_CONN: "500"
+      PROXY_MAX_CONN: "1000"
+      WARP_LICENSE_KEYS: ${WARP_LICENSE_KEYS:-}
+      MULTI_WARP_FORCE_REREGISTER: ${MULTI_WARP_FORCE_REREGISTER:-false}
       RUST_LOG: info
     volumes:
       - go-multi-warp-data:/var/lib/cloudflare-warp

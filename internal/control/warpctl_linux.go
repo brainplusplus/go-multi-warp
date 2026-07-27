@@ -112,7 +112,27 @@ func (w *WarpController) configureProxyMode(id int, port int) error {
 		return nil
 	}
 
-	regFile := filepath.Join(w.cfg.DataDir(id), "reg.json")
+	dataDir := w.cfg.DataDir(id)
+	regFile := filepath.Join(dataDir, "reg.json")
+	keyFile := filepath.Join(dataDir, "applied_license.txt")
+	wantKey := w.cfg.LicenseKeyFor(id)
+
+	// Drop registration if forced or if assigned license changed.
+	if w.cfg.ForceReregister() {
+		_ = os.Remove(regFile)
+		_ = os.Remove(keyFile)
+		_, _ = w.wcli(id, "registration", "delete")
+		w.log.Info("force re-register", zap.Int("id", id))
+	} else if wantKey != "" {
+		if prev, err := os.ReadFile(keyFile); err == nil {
+			if strings.TrimSpace(string(prev)) != wantKey {
+				_ = os.Remove(regFile)
+				_, _ = w.wcli(id, "registration", "delete")
+				w.log.Info("license changed; re-register", zap.Int("id", id))
+			}
+		}
+	}
+
 	if _, err := os.Stat(regFile); os.IsNotExist(err) {
 		for attempt := 1; attempt <= 12; attempt++ {
 			if _, err := w.wcli(id, "registration", "new"); err == nil {
@@ -127,11 +147,24 @@ func (w *WarpController) configureProxyMode(id int, port int) error {
 				time.Sleep(backoff)
 			}
 		}
-		for i, key := range w.cfg.Control.LicenseKeys {
-			if _, err := w.wcli(id, "registration", "license", key); err == nil {
-				w.log.Info("license applied", zap.Int("id", id), zap.Int("key_idx", i))
-				break
+
+		// Bind 1 key per instance (key = keys[id % len(keys)]).
+		if wantKey != "" {
+			if _, err := w.wcli(id, "registration", "license", wantKey); err != nil {
+				w.log.Warn("license apply failed",
+					zap.Int("id", id),
+					zap.String("key_tail", tailKey(wantKey)),
+					zap.Error(err))
+			} else {
+				_ = os.WriteFile(keyFile, []byte(wantKey+"\n"), 0o600)
+				w.log.Info("license applied",
+					zap.Int("id", id),
+					zap.String("key_tail", tailKey(wantKey)))
 			}
+		} else {
+			w.log.Warn("no license key for instance; free registration only",
+				zap.Int("id", id),
+				zap.Int("available_keys", len(w.cfg.Control.LicenseKeys)))
 		}
 	}
 
@@ -146,6 +179,14 @@ func (w *WarpController) configureProxyMode(id int, port int) error {
 	}
 	_, _ = w.wcli(id, "debug", "qlog", "disable")
 	return nil
+}
+
+func tailKey(k string) string {
+	k = strings.TrimSpace(k)
+	if len(k) <= 6 {
+		return k
+	}
+	return "..." + k[len(k)-6:]
 }
 
 func (w *WarpController) Reconnect(id int) error {

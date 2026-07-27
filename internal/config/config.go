@@ -148,14 +148,14 @@ func Default() Config {
 	return Config{
 		Listen:      Listen{Socks5: "0.0.0.0:11080", HTTP: "0.0.0.0:18080", Admin: "0.0.0.0:9090"},
 		Mode:        ModeAttach,
-		Instances:   5,
+		Instances:   10,
 		BasePort:    40000,
 		ConnTO:      Duration{5 * time.Second},
 		ProbeEvery:  Duration{5 * time.Second},
 		ProbeURL:    "https://cloudflare.com/cdn-cgi/trace",
 		RequireWarp: true,
 		Pool: Pool{
-			Strategy:         StrategyLeastConn,
+			Strategy:         StrategyRoundRobin,
 			MaxFails:         3,
 			FailTimeout:      Duration{15 * time.Second},
 			OpenAfter:        Duration{10 * time.Second},
@@ -277,6 +277,10 @@ func (c *Config) applyEnv() {
 	if v := os.Getenv("WARP_LICENSE_KEY"); v != "" {
 		c.Control.LicenseKeys = splitCSV(v)
 	}
+	// Alias used in Dokploy .env: comma-separated, 1 key per instance preferred.
+	if v := os.Getenv("WARP_LICENSE_KEYS"); v != "" {
+		c.Control.LicenseKeys = splitCSV(v)
+	}
 	if v := os.Getenv("WARP_ORG"); v != "" {
 		c.Control.Org = v
 	}
@@ -285,6 +289,20 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("WARP_AUTH_CLIENT_SECRET"); v != "" {
 		c.Control.AuthClientSecret = v
+	}
+	if v := os.Getenv("MULTI_WARP_STRATEGY"); v != "" {
+		switch strings.ToLower(strings.TrimSpace(v)) {
+		case "round_robin", "rr":
+			c.Pool.Strategy = StrategyRoundRobin
+		case "least_conn", "least-conn":
+			c.Pool.Strategy = StrategyLeastConn
+		case "sticky":
+			c.Pool.Strategy = StrategySticky
+		}
+	}
+	if v := os.Getenv("MULTI_WARP_FORCE_REREGISTER"); v != "" {
+		// Stashed in env for controller; no typed field needed.
+		_ = v
 	}
 	if v := os.Getenv("RUST_LOG"); v != "" {
 		c.Logging.Level = v
@@ -370,4 +388,23 @@ func (c *Config) RuntimeDir(id int) string {
 
 func (c *Config) DBusDir(id int) string {
 	return filepath.Join(c.Control.RuntimeRoot, fmt.Sprintf("dbus-%d", id))
+}
+
+// LicenseKeyFor returns the license key bound to instance id.
+// With N keys and M instances: key_i = keys[i % N]. Prefer N == M for 1:1 binding.
+func (c *Config) LicenseKeyFor(id int) string {
+	keys := c.Control.LicenseKeys
+	if len(keys) == 0 {
+		return ""
+	}
+	if id < 0 {
+		id = 0
+	}
+	return keys[id%len(keys)]
+}
+
+// ForceReregister reports whether instances should drop existing registration state.
+func (c *Config) ForceReregister() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("MULTI_WARP_FORCE_REREGISTER")))
+	return v == "1" || v == "true" || v == "yes"
 }
