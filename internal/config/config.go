@@ -42,8 +42,20 @@ type Config struct {
 	Pool         Pool       `yaml:"pool"`
 	Limits       Limits     `yaml:"limits"`
 	Control      Control    `yaml:"control"`
+	Uniqueness   Uniqueness `yaml:"uniqueness"`
 	Logging      Logging    `yaml:"logging"`
 	Backends     []Backend  `yaml:"backends"`
+}
+
+// Uniqueness controls progressive admit + best-effort unique IPv4 expansion.
+// Not a guarantee: Cloudflare free WARP often shares a small IPv4 egress pool.
+type Uniqueness struct {
+	Enabled       bool     `yaml:"enabled"`
+	MaxInstances  int      `yaml:"max_instances"`  // effort only if instances <= this (default 20)
+	MaxAttempts   int      `yaml:"max_attempts"`   // re-reg attempts per slot after first
+	ProbeURL      string   `yaml:"probe_url"`      // IPv4 probe, default https://api.ipify.org
+	Strict        bool     `yaml:"strict"`         // if true, exhausted slots stay out of pool
+	RetryBackoff  Duration `yaml:"retry_backoff_ms"`
 }
 
 type Listen struct {
@@ -176,6 +188,14 @@ func Default() Config {
 			DataRoot:         defaultDataRoot(),
 			RuntimeRoot:      filepath.Join(os.TempDir(), "go-multi-warp"),
 		},
+		Uniqueness: Uniqueness{
+			Enabled:      true,
+			MaxInstances: 20,
+			MaxAttempts:  8,
+			ProbeURL:     "https://api.ipify.org",
+			Strict:       false,
+			RetryBackoff: Duration{8 * time.Second},
+		},
 		Logging: Logging{Level: "info", JSON: false},
 	}
 }
@@ -304,6 +324,25 @@ func (c *Config) applyEnv() {
 		// Stashed in env for controller; no typed field needed.
 		_ = v
 	}
+	if v := os.Getenv("MULTI_WARP_UNIQUE_IPV4"); v != "" {
+		c.Uniqueness.Enabled = parseBool(v, c.Uniqueness.Enabled)
+	}
+	if v := os.Getenv("MULTI_WARP_UNIQUE_IPV4_MAX"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Uniqueness.MaxInstances = n
+		}
+	}
+	if v := os.Getenv("MULTI_WARP_UNIQUE_ATTEMPTS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Uniqueness.MaxAttempts = n
+		}
+	}
+	if v := os.Getenv("MULTI_WARP_UNIQUE_PROBE_URL"); v != "" {
+		c.Uniqueness.ProbeURL = v
+	}
+	if v := os.Getenv("MULTI_WARP_UNIQUE_STRICT"); v != "" {
+		c.Uniqueness.Strict = parseBool(v, c.Uniqueness.Strict)
+	}
 	if v := os.Getenv("RUST_LOG"); v != "" {
 		c.Logging.Level = v
 	}
@@ -331,6 +370,33 @@ func splitCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+func parseBool(s string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
+}
+
+// UniqueEffortActive reports whether best-effort uniqueness should run.
+func (c *Config) UniqueEffortActive() bool {
+	if !c.Uniqueness.Enabled {
+		return false
+	}
+	max := c.Uniqueness.MaxInstances
+	if max <= 0 {
+		max = 20
+	}
+	n := c.Instances
+	if n <= 0 {
+		n = len(c.Backends)
+	}
+	return n > 0 && n <= max
 }
 
 func (c *Config) Validate() error {

@@ -25,23 +25,33 @@ type State struct {
 type HealthResponse struct {
 	Status          string `json:"status"`
 	HealthyBackends int    `json:"healthy_backends"`
+	InPool          int    `json:"in_pool"`
+	Warming         int    `json:"warming"`
+	Parked          int    `json:"parked"`
+	UniqueIPv4      int    `json:"unique_ipv4"`
 	TotalBackends   int    `json:"total_backends"`
 	ActiveConns     int64  `json:"active_conns"`
 	UptimeSec       int64  `json:"uptime_sec"`
 }
 
 type MetricsResponse struct {
-	UptimeSec       int64              `json:"uptime_sec"`
-	HealthyBackends int                `json:"healthy_backends"`
-	TotalBackends   int                `json:"total_backends"`
-	ActiveConns     int64              `json:"active_conns"`
-	Selects         uint64             `json:"selects"`
-	SelectFail      uint64             `json:"select_fail"`
-	ProbeSuccess    uint64             `json:"probe_success"`
-	ProbeFailure    uint64             `json:"probe_failure"`
-	Strategy        string             `json:"strategy"`
-	Mode            string             `json:"mode"`
-	Backends        []pool.Snapshot    `json:"backends"`
+	UptimeSec       int64           `json:"uptime_sec"`
+	HealthyBackends int             `json:"healthy_backends"`
+	InPool          int             `json:"in_pool"`
+	Warming         int             `json:"warming"`
+	Parked          int             `json:"parked"`
+	UniqueIPv4      int             `json:"unique_ipv4"`
+	TotalBackends   int             `json:"total_backends"`
+	ActiveConns     int64           `json:"active_conns"`
+	Selects         uint64          `json:"selects"`
+	SelectFail      uint64          `json:"select_fail"`
+	ProbeSuccess    uint64          `json:"probe_success"`
+	ProbeFailure    uint64          `json:"probe_failure"`
+	Strategy        string          `json:"strategy"`
+	Mode            string          `json:"mode"`
+	UniqueEffort    bool            `json:"unique_ipv4_effort"`
+	UniqueStrict    bool            `json:"unique_ipv4_strict"`
+	Backends        []pool.Snapshot `json:"backends"`
 }
 
 func New(cfg *config.Config, p *pool.Pool, st *proxy.State, log *zap.Logger) *State {
@@ -66,14 +76,19 @@ func (s *State) Handler() http.Handler {
 
 func (s *State) healthz(w http.ResponseWriter, r *http.Request) {
 	healthy := s.Pool.HealthyCount()
+	inPool, warming, parked, uniqueIPs := s.Pool.AdmitStats()
 	total := len(s.Pool.Backends())
 	status := "ok"
-	if healthy == 0 {
+	if healthy == 0 || inPool == 0 {
 		status = "degraded"
 	}
 	json.NewEncoder(w).Encode(HealthResponse{
 		Status:          status,
 		HealthyBackends: healthy,
+		InPool:          inPool,
+		Warming:         warming,
+		Parked:          parked,
+		UniqueIPv4:      uniqueIPs,
 		TotalBackends:   total,
 		ActiveConns:     s.Proxy.Limiter.Active(),
 		UptimeSec:       int64(time.Since(s.Started).Seconds()),
@@ -92,9 +107,14 @@ func (s *State) readyz(w http.ResponseWriter, r *http.Request) {
 
 func (s *State) metrics(w http.ResponseWriter, r *http.Request) {
 	m := s.Pool.Metrics()
+	inPool, warming, parked, uniqueIPs := s.Pool.AdmitStats()
 	json.NewEncoder(w).Encode(MetricsResponse{
 		UptimeSec:       int64(time.Since(s.Started).Seconds()),
 		HealthyBackends: s.Pool.HealthyCount(),
+		InPool:          inPool,
+		Warming:         warming,
+		Parked:          parked,
+		UniqueIPv4:      uniqueIPs,
 		TotalBackends:   len(s.Pool.Backends()),
 		ActiveConns:     s.Proxy.Limiter.Active(),
 		Selects:         m.Selects.Load(),
@@ -103,6 +123,8 @@ func (s *State) metrics(w http.ResponseWriter, r *http.Request) {
 		ProbeFailure:    m.Failure.Load(),
 		Strategy:        string(s.Cfg.Pool.Strategy),
 		Mode:            string(s.Cfg.Mode),
+		UniqueEffort:    s.Cfg.UniqueEffortActive(),
+		UniqueStrict:    s.Cfg.Uniqueness.Strict,
 		Backends:        s.Pool.Snapshots(),
 	})
 }

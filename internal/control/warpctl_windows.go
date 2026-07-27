@@ -38,3 +38,7 @@ func (w *WarpController) Reconnect(id int) error {
 func (w *WarpController) Restart(id int) error {
 	return fmt.Errorf("managed mode warp-svc spawn is Linux-only")
 }
+
+func (w *WarpController) Reregister(id int) error {
+	return fmt.Errorf("managed mode warp-svc spawn is Linux-only")
+}

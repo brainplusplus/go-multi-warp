@@ -24,6 +24,10 @@ services:
       # Comma-separated, 1 key per instance for unique IPv4
       WARP_LICENSE_KEYS: ${WARP_LICENSE_KEYS:-}
       MULTI_WARP_FORCE_REREGISTER: ${MULTI_WARP_FORCE_REREGISTER:-false}
+      MULTI_WARP_UNIQUE_IPV4: ${MULTI_WARP_UNIQUE_IPV4:-true}
+      MULTI_WARP_UNIQUE_IPV4_MAX: ${MULTI_WARP_UNIQUE_IPV4_MAX:-20}
+      MULTI_WARP_UNIQUE_ATTEMPTS: ${MULTI_WARP_UNIQUE_ATTEMPTS:-8}
+      MULTI_WARP_UNIQUE_STRICT: ${MULTI_WARP_UNIQUE_STRICT:-false}
       RUST_LOG: info
     volumes:
       - go-multi-warp-data:/var/lib/cloudflare-warp

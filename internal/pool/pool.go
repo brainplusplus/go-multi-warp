@@ -252,6 +252,71 @@ func (p *Pool) HealthyCount() int {
 	return count
 }
 
+// Admit adds backend to selector pool with optional egress IPv4 tag.
+func (p *Pool) Admit(id int, egressIPv4 string) bool {
+	b := p.Get(id)
+	if b == nil {
+		return false
+	}
+	b.SetAdmit(AdmitInPool, egressIPv4)
+	return true
+}
+
+// Park keeps backend out of selector (strict uniqueness exhausted).
+func (p *Pool) Park(id int, egressIPv4 string) bool {
+	b := p.Get(id)
+	if b == nil {
+		return false
+	}
+	b.SetAdmit(AdmitParked, egressIPv4)
+	return true
+}
+
+// SetWarming marks backend as not yet selectable.
+func (p *Pool) SetWarming(id int) bool {
+	b := p.Get(id)
+	if b == nil {
+		return false
+	}
+	b.SetAdmit(AdmitWarming, "")
+	return true
+}
+
+// InPoolIPv4Set returns current egress IPv4 addresses of admitted backends.
+func (p *Pool) InPoolIPv4Set() map[string]int {
+	out := make(map[string]int)
+	for _, b := range p.Backends() {
+		if b.AdmitPhase() != AdmitInPool {
+			continue
+		}
+		ip := b.EgressIPv4()
+		if ip == "" {
+			continue
+		}
+		out[ip] = b.ID
+	}
+	return out
+}
+
+// AdmitStats returns progressive pool membership counters.
+func (p *Pool) AdmitStats() (inPool, warming, parked int, uniqueIPs int) {
+	ips := make(map[string]struct{})
+	for _, b := range p.Backends() {
+		switch b.AdmitPhase() {
+		case AdmitInPool:
+			inPool++
+			if ip := b.EgressIPv4(); ip != "" {
+				ips[ip] = struct{}{}
+			}
+		case AdmitParked:
+			parked++
+		default:
+			warming++
+		}
+	}
+	return inPool, warming, parked, len(ips)
+}
+
 // ConnLimiter tracks global + per-IP counters with acquire/release semantics.
 type ConnLimiter struct {
 	global    atomic.Int64

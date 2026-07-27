@@ -16,6 +16,7 @@ type Supervisor struct {
 	cfg        *config.Config
 	log        *zap.Logger
 	controller *WarpController
+	unique     *UniquenessEngine
 }
 
 func New(cfg *config.Config, p *pool.Pool, log *zap.Logger) *Supervisor {
@@ -23,22 +24,42 @@ func New(cfg *config.Config, p *pool.Pool, log *zap.Logger) *Supervisor {
 	if cfg.Mode == config.ModeManaged {
 		ctl = NewWarpController(cfg, log)
 	}
-	return &Supervisor{pool: p, cfg: cfg, log: log, controller: ctl}
+	s := &Supervisor{pool: p, cfg: cfg, log: log, controller: ctl}
+	s.unique = NewUniquenessEngine(cfg, p, ctl, log)
+	return s
 }
+
+func (s *Supervisor) Controller() *WarpController { return s.controller }
 
 func (s *Supervisor) Bootstrap(ctx context.Context) error {
 	if s.controller == nil {
 		s.log.Info("attach mode: using existing backend ports",
 			zap.Int("backends", len(s.pool.Backends())))
+		// In attach mode backends may already be live — uniqueness will admit progressively.
 		return nil
 	}
 	if runtime.GOOS == "windows" {
 		return fmt.Errorf("managed mode is Linux-only; use attach mode on Windows host")
 	}
-	return s.controller.StartAll(ctx)
+	// Non-blocking: start all warp-svc in background so proxy listeners can open immediately.
+	// Uniqueness engine admits first healthy instance ASAP; others expand in background.
+	go func() {
+		if err := s.controller.StartAll(ctx); err != nil {
+			s.log.Error("control-plane start_all failed", zap.Error(err))
+		}
+	}()
+	s.log.Info("managed bootstrap: warp instances starting in background (progressive admit)")
+	return nil
 }
 
 func (s *Supervisor) Run(ctx context.Context) {
+	if s.unique != nil {
+		go s.unique.Run(ctx)
+	}
+	s.runReconnectLoop(ctx)
+}
+
+func (s *Supervisor) runReconnectLoop(ctx context.Context) {
 	interval := s.cfg.ProbeEvery.Duration * 2
 	if interval < 5*time.Second {
 		interval = 5 * time.Second

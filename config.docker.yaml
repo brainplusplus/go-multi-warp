@@ -41,6 +41,15 @@ control:
   data_root: "/var/lib/cloudflare-warp"
   runtime_root: "/run/multi-warp"
 
+# Progressive admit + best-effort unique IPv4 (NOT a guarantee).
+uniqueness:
+  enabled: true
+  max_instances: 20
+  max_attempts: 8
+  probe_url: "https://api.ipify.org"
+  strict: false
+  retry_backoff_ms: 8000
+
 logging:
   level: "info"
   json: false

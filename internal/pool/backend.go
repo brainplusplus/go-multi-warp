@@ -38,27 +38,53 @@ type ProbeInfo struct {
 	LatencyMS int64  `json:"latency_ms"`
 }
 
+// AdmitPhase tracks progressive pool membership (independent of health state).
+type AdmitPhase int
+
+const (
+	AdmitWarming AdmitPhase = iota // not in selector yet
+	AdmitInPool                    // selectable by LB
+	AdmitParked                    // uniqueness exhausted under strict mode
+)
+
+func (p AdmitPhase) String() string {
+	switch p {
+	case AdmitInPool:
+		return "in_pool"
+	case AdmitParked:
+		return "parked"
+	default:
+		return "warming"
+	}
+}
+
 type Snapshot struct {
-	ID             int        `json:"id"`
-	Addr           string     `json:"addr"`
-	State          string     `json:"state"`
-	Fails          int        `json:"fails"`
-	Inflight       int32      `json:"inflight"`
-	SuccessTotal   uint64     `json:"success_total"`
-	FailTotal      uint64     `json:"fail_total"`
-	LastProbe      *ProbeInfo `json:"last_probe,omitempty"`
-	LastError      string     `json:"last_error,omitempty"`
-	LastChangeAgo  int64      `json:"last_change_ms_ago"`
+	ID            int        `json:"id"`
+	Addr          string     `json:"addr"`
+	State         string     `json:"state"`
+	Admit         string     `json:"admit"`
+	EgressIPv4    string     `json:"egress_ipv4,omitempty"`
+	UniqueTries   int        `json:"unique_attempts"`
+	Fails         int        `json:"fails"`
+	Inflight      int32      `json:"inflight"`
+	SuccessTotal  uint64     `json:"success_total"`
+	FailTotal     uint64     `json:"fail_total"`
+	LastProbe     *ProbeInfo `json:"last_probe,omitempty"`
+	LastError     string     `json:"last_error,omitempty"`
+	LastChangeAgo int64      `json:"last_change_ms_ago"`
 }
 
 type innerState struct {
-	mu        sync.RWMutex
-	state     State
-	fails     int
-	lastError string
-	lastProbe *ProbeInfo
-	lastChange time.Time
-	openedAt   *time.Time
+	mu          sync.RWMutex
+	state       State
+	admit       AdmitPhase
+	egressIPv4  string
+	uniqueTries int
+	fails       int
+	lastError   string
+	lastProbe   *ProbeInfo
+	lastChange  time.Time
+	openedAt    *time.Time
 }
 
 type Backend struct {
@@ -90,6 +116,7 @@ func NewBackend(id int, addr string, maxFails int, failTimeout, openAfter time.D
 		MaxInflight: maxInflight,
 	}
 	b.inner.state = StateUnknown
+	b.inner.admit = AdmitWarming
 	b.inner.lastChange = time.Now()
 	return b
 }
@@ -119,6 +146,9 @@ func (b *Backend) Release() { b.inflight.Add(-1) }
 func (b *Backend) IsSelectable() bool {
 	b.inner.mu.Lock()
 	defer b.inner.mu.Unlock()
+	if b.inner.admit != AdmitInPool {
+		return false
+	}
 	switch b.inner.state {
 	case StateHealthy, StateDegraded, StateUnknown:
 		return true
@@ -223,6 +253,41 @@ func (b *Backend) Fails() int {
 	return b.inner.fails
 }
 
+func (b *Backend) AdmitPhase() AdmitPhase {
+	b.inner.mu.RLock()
+	defer b.inner.mu.RUnlock()
+	return b.inner.admit
+}
+
+func (b *Backend) EgressIPv4() string {
+	b.inner.mu.RLock()
+	defer b.inner.mu.RUnlock()
+	return b.inner.egressIPv4
+}
+
+func (b *Backend) UniqueAttempts() int {
+	b.inner.mu.RLock()
+	defer b.inner.mu.RUnlock()
+	return b.inner.uniqueTries
+}
+
+func (b *Backend) SetAdmit(phase AdmitPhase, egressIPv4 string) {
+	b.inner.mu.Lock()
+	defer b.inner.mu.Unlock()
+	b.inner.admit = phase
+	if egressIPv4 != "" {
+		b.inner.egressIPv4 = egressIPv4
+	}
+	b.inner.lastChange = time.Now()
+}
+
+func (b *Backend) IncUniqueAttempt() int {
+	b.inner.mu.Lock()
+	defer b.inner.mu.Unlock()
+	b.inner.uniqueTries++
+	return b.inner.uniqueTries
+}
+
 func (b *Backend) Snapshot() Snapshot {
 	b.inner.mu.RLock()
 	defer b.inner.mu.RUnlock()
@@ -235,6 +300,9 @@ func (b *Backend) Snapshot() Snapshot {
 		ID:            b.ID,
 		Addr:          b.Addr,
 		State:         b.inner.state.String(),
+		Admit:         b.inner.admit.String(),
+		EgressIPv4:    b.inner.egressIPv4,
+		UniqueTries:   b.inner.uniqueTries,
 		Fails:         b.inner.fails,
 		Inflight:      b.inflight.Load(),
 		SuccessTotal:  b.successTotal.Load(),

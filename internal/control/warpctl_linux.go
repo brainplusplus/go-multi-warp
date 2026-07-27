@@ -201,6 +201,62 @@ func (w *WarpController) Restart(id int) error {
 	return w.StartOne(id)
 }
 
+// Reregister drops device registration and creates a fresh free (or licensed) registration.
+// Used by progressive unique-IPv4 background expansion. Best-effort only.
+func (w *WarpController) Reregister(id int) error {
+	dataDir := w.cfg.DataDir(id)
+	regFile := filepath.Join(dataDir, "reg.json")
+	keyFile := filepath.Join(dataDir, "applied_license.txt")
+	_, _ = w.wcli(id, "disconnect")
+	_, _ = w.wcli(id, "registration", "delete")
+	_ = os.Remove(regFile)
+	_ = os.Remove(keyFile)
+	time.Sleep(500 * time.Millisecond)
+
+	regOK := false
+	for attempt := 1; attempt <= 8; attempt++ {
+		if _, err := w.wcli(id, "registration", "new"); err == nil {
+			regOK = true
+			break
+		} else {
+			backoff := time.Duration(attempt) * 2 * time.Second
+			if backoff > 20*time.Second {
+				backoff = 20 * time.Second
+			}
+			w.log.Warn("reregister registration failed",
+				zap.Int("id", id), zap.Int("attempt", attempt), zap.Error(err))
+			time.Sleep(backoff)
+		}
+	}
+	if !regOK {
+		return fmt.Errorf("reregister: registration new failed for id=%d", id)
+	}
+
+	wantKey := w.cfg.LicenseKeyFor(id)
+	if wantKey != "" {
+		if _, err := w.wcli(id, "registration", "license", wantKey); err != nil {
+			w.log.Warn("reregister license apply failed",
+				zap.Int("id", id), zap.String("key_tail", tailKey(wantKey)), zap.Error(err))
+		} else {
+			_ = os.WriteFile(keyFile, []byte(wantKey+"\n"), 0o600)
+		}
+	}
+
+	port := w.cfg.BasePort + id
+	if _, err := w.wcli(id, "mode", "proxy"); err != nil {
+		return err
+	}
+	if _, err := w.wcli(id, "proxy", "port", fmt.Sprintf("%d", port)); err != nil {
+		return err
+	}
+	if _, err := w.wcli(id, "connect"); err != nil {
+		return err
+	}
+	_, _ = w.wcli(id, "debug", "qlog", "disable")
+	w.log.Info("reregister complete", zap.Int("id", id), zap.Int("port", port))
+	return nil
+}
+
 func (w *WarpController) wcli(id int, args ...string) (string, error) {
 	runDir := w.cfg.RuntimeDir(id)
 	dbusSock := filepath.Join(w.cfg.DBusDir(id), "system_bus_socket")

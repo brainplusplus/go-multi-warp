@@ -47,11 +47,12 @@ func main() {
 	defer log.Sync()
 
 	log.Info("go-multi-warp starting",
-		zap.String("version", "0.1.0"),
+		zap.String("version", "0.2.0"),
 		zap.String("mode", string(cfg.Mode)),
 		zap.Int("instances", cfg.Instances),
 		zap.Int("backends", len(cfg.BackendAddrs())),
 		zap.String("strategy", string(cfg.Pool.Strategy)),
+		zap.Bool("unique_ipv4_effort", cfg.UniqueEffortActive()),
 		zap.String("os", runtime.GOOS),
 	)
 

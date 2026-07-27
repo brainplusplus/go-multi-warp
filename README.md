@@ -53,8 +53,20 @@ See `.env.example`. Important knobs:
 | `MULTI_WARP_STRATEGY` | `round_robin` | `round_robin` / `least_conn` / `sticky` |
 | `WARP_LICENSE_KEYS` | empty | **Comma-separated**. Instance `i` uses `keys[i % N]` |
 | `MULTI_WARP_FORCE_REREGISTER` | `false` | Set `true` once after key change, redeploy, then set `false` |
+| `MULTI_WARP_UNIQUE_IPV4` | `true` | Progressive admit + best-effort unique IPv4 expansion |
+| `MULTI_WARP_UNIQUE_IPV4_MAX` | `20` | Effort only if `instances <= max` |
+| `MULTI_WARP_UNIQUE_ATTEMPTS` | `8` | Re-reg attempts per slot after first |
+| `MULTI_WARP_UNIQUE_STRICT` | `false` | `false`=admit non-unique after cap; `true`=park them |
 | `PROXY_USER` / `PROXY_PASS` | `user`/`pass` | HTTP + SOCKS auth |
 | `PROXY_MAX_CONN` | `1000` | per-IP connection cap |
+
+### Progressive admit (serve ASAP)
+
+1. First healthy backend is **admitted immediately** (proxy usable without waiting for all N).
+2. Backends `2..N` (only if `instances <= 20`): probe egress IPv4; if not already in pool → admit; else re-register and retry (bounded).
+3. Admin shows honesty metrics: `in_pool`, `warming`, `parked`, `unique_ipv4`.
+
+This improves **diversity best-effort**. It does **not** guarantee `instances` unique public IPv4 addresses — Cloudflare free WARP often shares a small egress pool per region.
 
 ### Unique IPv4 (multi-key)
 
