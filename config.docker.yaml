@@ -9,7 +9,7 @@ auth:
   password: "pass"
 
 mode: managed
-instances: 5
+instances: 10
 base_port: 40000
 connect_timeout_ms: 5000
 probe_interval_ms: 5000
@@ -17,7 +17,7 @@ probe_url: "https://cloudflare.com/cdn-cgi/trace"
 probe_require_warp: true
 
 pool:
-  strategy: least_conn
+  strategy: round_robin
   max_fails: 3
   fail_timeout_ms: 15000
   open_after_ms: 10000
