@@ -83,6 +83,7 @@ func (e *UniquenessEngine) SnapshotStats() map[string]any {
 	inPool, _, _, uniqueIPs := e.pool.AdmitStats()
 	ceiling := uniqueIPs > 0 && inPool >= e.cfg.Instances && uniqueIPs < e.cfg.Instances
 	hist := e.egressHistogram()
+	regCap := regCapacity(e.regSem)
 	return map[string]any{
 		"collisions":         e.stats.Collisions.Load(),
 		"rereg_attempts":     e.stats.ReregAttempts.Load(),
@@ -96,12 +97,13 @@ func (e *UniquenessEngine) SnapshotStats() map[string]any {
 		"unique_ipv4":        uniqueIPs,
 		"in_pool":            inPool,
 		"egress_histogram":   hist,
-		"max_concurrent_reg": cap(e.regSem),
+		"max_concurrent_reg": regCap,
 		"recheck_every_ms":   e.recheckEvery().Milliseconds(),
 	}
 }
 
-func cap(ch chan struct{}) int {
+// regCapacity returns the buffered size of the re-reg semaphore (no shadowing builtin).
+func regCapacity(ch chan struct{}) int {
 	if ch == nil {
 		return 0
 	}
@@ -133,7 +135,7 @@ func (e *UniquenessEngine) Run(ctx context.Context) {
 			zap.Int("max_instances", e.cfg.Uniqueness.MaxInstances),
 			zap.Int("max_attempts", e.cfg.Uniqueness.MaxAttempts),
 			zap.Bool("strict", e.cfg.Uniqueness.Strict),
-			zap.Int("max_concurrent_reg", cap(e.regSem)),
+			zap.Int("max_concurrent_reg", regCapacity(e.regSem)),
 			zap.Duration("stagger", e.stagger()),
 			zap.Duration("backoff_base", e.backoffBase()),
 			zap.Duration("recheck_every", e.recheckEvery()),
@@ -385,7 +387,7 @@ func (e *UniquenessEngine) tryReregister(ctx context.Context, id, attempt int) b
 	case e.regSem <- struct{}{}:
 		// acquired
 	default:
-		e.log.Debug("reregister concurrent cap full", zap.Int("id", id), zap.Int("cap", cap(e.regSem)))
+		e.log.Debug("reregister concurrent cap full", zap.Int("id", id), zap.Int("cap", regCapacity(e.regSem)))
 		return false
 	}
 	e.lastRegStart = time.Now()
