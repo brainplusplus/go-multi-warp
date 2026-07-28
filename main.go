@@ -47,7 +47,7 @@ func main() {
 	defer log.Sync()
 
 	log.Info("go-multi-warp starting",
-		zap.String("version", "0.2.0"),
+		zap.String("version", "0.2.1"),
 		zap.String("mode", string(cfg.Mode)),
 		zap.Int("instances", cfg.Instances),
 		zap.Int("backends", len(cfg.BackendAddrs())),
@@ -92,8 +92,14 @@ func main() {
 		}
 	}()
 
-	// admin API
+	// admin API (wired to uniqueness stats for honest operator metrics)
 	adminState := admin.New(cfg, p, st, log)
+	adminState.UniqueStats = func() map[string]any {
+		if u := supervisor.Uniqueness(); u != nil {
+			return u.SnapshotStats()
+		}
+		return nil
+	}
 	go func() {
 		if err := adminState.Serve(ctx); err != nil {
 			log.Error("admin server exited", zap.Error(err))

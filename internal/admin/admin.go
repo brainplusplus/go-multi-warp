@@ -15,11 +15,12 @@ import (
 )
 
 type State struct {
-	Pool     *pool.Pool
-	Proxy    *proxy.State
-	Cfg      *config.Config
-	Started  time.Time
-	Log      *zap.Logger
+	Pool        *pool.Pool
+	Proxy       *proxy.State
+	Cfg         *config.Config
+	Started     time.Time
+	Log         *zap.Logger
+	UniqueStats func() map[string]any // optional; set by main from uniqueness engine
 }
 
 type HealthResponse struct {
@@ -29,6 +30,7 @@ type HealthResponse struct {
 	Warming         int    `json:"warming"`
 	Parked          int    `json:"parked"`
 	UniqueIPv4      int    `json:"unique_ipv4"`
+	CeilingHit      bool   `json:"ceiling_hit"`
 	TotalBackends   int    `json:"total_backends"`
 	ActiveConns     int64  `json:"active_conns"`
 	UptimeSec       int64  `json:"uptime_sec"`
@@ -51,6 +53,7 @@ type MetricsResponse struct {
 	Mode            string          `json:"mode"`
 	UniqueEffort    bool            `json:"unique_ipv4_effort"`
 	UniqueStrict    bool            `json:"unique_ipv4_strict"`
+	Unique          map[string]any  `json:"unique,omitempty"`
 	Backends        []pool.Snapshot `json:"backends"`
 }
 
@@ -82,6 +85,14 @@ func (s *State) healthz(w http.ResponseWriter, r *http.Request) {
 	if healthy == 0 || inPool == 0 {
 		status = "degraded"
 	}
+	ceiling := uniqueIPs > 0 && inPool >= total && uniqueIPs < inPool
+	if s.UniqueStats != nil {
+		if st := s.UniqueStats(); st != nil {
+			if v, ok := st["ceiling_hit"].(bool); ok && v {
+				ceiling = true
+			}
+		}
+	}
 	json.NewEncoder(w).Encode(HealthResponse{
 		Status:          status,
 		HealthyBackends: healthy,
@@ -89,6 +100,7 @@ func (s *State) healthz(w http.ResponseWriter, r *http.Request) {
 		Warming:         warming,
 		Parked:          parked,
 		UniqueIPv4:      uniqueIPs,
+		CeilingHit:      ceiling,
 		TotalBackends:   total,
 		ActiveConns:     s.Proxy.Limiter.Active(),
 		UptimeSec:       int64(time.Since(s.Started).Seconds()),
@@ -108,6 +120,10 @@ func (s *State) readyz(w http.ResponseWriter, r *http.Request) {
 func (s *State) metrics(w http.ResponseWriter, r *http.Request) {
 	m := s.Pool.Metrics()
 	inPool, warming, parked, uniqueIPs := s.Pool.AdmitStats()
+	var unique map[string]any
+	if s.UniqueStats != nil {
+		unique = s.UniqueStats()
+	}
 	json.NewEncoder(w).Encode(MetricsResponse{
 		UptimeSec:       int64(time.Since(s.Started).Seconds()),
 		HealthyBackends: s.Pool.HealthyCount(),
@@ -125,6 +141,7 @@ func (s *State) metrics(w http.ResponseWriter, r *http.Request) {
 		Mode:            string(s.Cfg.Mode),
 		UniqueEffort:    s.Cfg.UniqueEffortActive(),
 		UniqueStrict:    s.Cfg.Uniqueness.Strict,
+		Unique:          unique,
 		Backends:        s.Pool.Snapshots(),
 	})
 }

@@ -31,6 +31,8 @@ func New(cfg *config.Config, p *pool.Pool, log *zap.Logger) *Supervisor {
 
 func (s *Supervisor) Controller() *WarpController { return s.controller }
 
+func (s *Supervisor) Uniqueness() *UniquenessEngine { return s.unique }
+
 func (s *Supervisor) Bootstrap(ctx context.Context) error {
 	if s.controller == nil {
 		s.log.Info("attach mode: using existing backend ports",

@@ -57,6 +57,11 @@ See `.env.example`. Important knobs:
 | `MULTI_WARP_UNIQUE_IPV4_MAX` | `20` | Effort only if `instances <= max` |
 | `MULTI_WARP_UNIQUE_ATTEMPTS` | `8` | Re-reg attempts per slot after first |
 | `MULTI_WARP_UNIQUE_STRICT` | `false` | `false`=admit non-unique after cap; `true`=park them |
+| `MULTI_WARP_UNIQUE_BACKOFF_MS` | `8000` | Base re-reg backoff (exponential up to 8×, cap 60s) |
+| `MULTI_WARP_UNIQUE_MAX_CONCURRENT_REG` | `2` | Max concurrent WARP re-registrations |
+| `MULTI_WARP_UNIQUE_STAGGER_MS` | `3000` | Min gap between starting re-regs |
+| `MULTI_WARP_UNIQUE_RECHECK_MS` | `60000` | Post-admit collision recheck interval |
+| `MULTI_WARP_UNIQUE_RECHECK_MAX` | `3` | Max post-admit re-regs per backend |
 | `PROXY_USER` / `PROXY_PASS` | `user`/`pass` | HTTP + SOCKS auth |
 | `PROXY_MAX_CONN` | `1000` | per-IP connection cap |
 
@@ -64,9 +69,11 @@ See `.env.example`. Important knobs:
 
 1. First healthy backend is **admitted immediately** (proxy usable without waiting for all N).
 2. Backends `2..N` (only if `instances <= 20`): probe egress IPv4; if not already in pool → admit; else re-register and retry (bounded).
-3. Admin shows honesty metrics: `in_pool`, `warming`, `parked`, `unique_ipv4`.
+3. Safer re-reg: concurrent cap + stagger + exponential backoff (less CF thrash).
+4. Post-admit recheck: if two in-pool backends share IPv4, higher-ID one re-regs in background (capacity kept).
+5. Admin honesty metrics: `in_pool`, `warming`, `parked`, `unique_ipv4`, `ceiling_hit`; `/metrics` has `unique` block (collisions, rereg_*, egress_histogram).
 
-This improves **diversity best-effort**. It does **not** guarantee `instances` unique public IPv4 addresses — Cloudflare free WARP often shares a small egress pool per region.
+This improves **diversity best-effort**. It does **not** guarantee `instances` unique public IPv4 addresses — Cloudflare free WARP often shares a small egress pool per region. `in_pool≈N` with `unique_ipv4≈2–4` and `ceiling_hit=true` is expected success for free WARP mode C.
 
 ### Unique IPv4 (multi-key)
 

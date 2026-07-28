@@ -50,12 +50,16 @@ type Config struct {
 // Uniqueness controls progressive admit + best-effort unique IPv4 expansion.
 // Not a guarantee: Cloudflare free WARP often shares a small IPv4 egress pool.
 type Uniqueness struct {
-	Enabled       bool     `yaml:"enabled"`
-	MaxInstances  int      `yaml:"max_instances"`  // effort only if instances <= this (default 20)
-	MaxAttempts   int      `yaml:"max_attempts"`   // re-reg attempts per slot after first
-	ProbeURL      string   `yaml:"probe_url"`      // IPv4 probe, default https://api.ipify.org
-	Strict        bool     `yaml:"strict"`         // if true, exhausted slots stay out of pool
-	RetryBackoff  Duration `yaml:"retry_backoff_ms"`
+	Enabled          bool     `yaml:"enabled"`
+	MaxInstances     int      `yaml:"max_instances"`      // effort only if instances <= this (default 20)
+	MaxAttempts      int      `yaml:"max_attempts"`       // re-reg attempts per slot after first
+	ProbeURL         string   `yaml:"probe_url"`          // IPv4 probe, default https://api.ipify.org
+	Strict           bool     `yaml:"strict"`             // if true, exhausted slots stay out of pool
+	RetryBackoff     Duration `yaml:"retry_backoff_ms"`   // base backoff between re-reg attempts
+	MaxConcurrentReg int      `yaml:"max_concurrent_reg"` // concurrent re-reg cap (default 2)
+	Stagger          Duration `yaml:"stagger_ms"`         // gap between starting re-regs
+	RecheckEvery     Duration `yaml:"recheck_every_ms"`   // post-admit collision recheck interval
+	RecheckMax       int      `yaml:"recheck_max"`        // max post-admit re-regs per backend
 }
 
 type Listen struct {
@@ -189,12 +193,16 @@ func Default() Config {
 			RuntimeRoot:      filepath.Join(os.TempDir(), "go-multi-warp"),
 		},
 		Uniqueness: Uniqueness{
-			Enabled:      true,
-			MaxInstances: 20,
-			MaxAttempts:  8,
-			ProbeURL:     "https://api.ipify.org",
-			Strict:       false,
-			RetryBackoff: Duration{8 * time.Second},
+			Enabled:          true,
+			MaxInstances:     20,
+			MaxAttempts:      8,
+			ProbeURL:         "https://api.ipify.org",
+			Strict:           false,
+			RetryBackoff:     Duration{8 * time.Second},
+			MaxConcurrentReg: 2,
+			Stagger:          Duration{3 * time.Second},
+			RecheckEvery:     Duration{60 * time.Second},
+			RecheckMax:       3,
 		},
 		Logging: Logging{Level: "info", JSON: false},
 	}
@@ -342,6 +350,31 @@ func (c *Config) applyEnv() {
 	}
 	if v := os.Getenv("MULTI_WARP_UNIQUE_STRICT"); v != "" {
 		c.Uniqueness.Strict = parseBool(v, c.Uniqueness.Strict)
+	}
+	if v := os.Getenv("MULTI_WARP_UNIQUE_BACKOFF_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Uniqueness.RetryBackoff = Duration{time.Duration(n) * time.Millisecond}
+		}
+	}
+	if v := os.Getenv("MULTI_WARP_UNIQUE_MAX_CONCURRENT_REG"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Uniqueness.MaxConcurrentReg = n
+		}
+	}
+	if v := os.Getenv("MULTI_WARP_UNIQUE_STAGGER_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			c.Uniqueness.Stagger = Duration{time.Duration(n) * time.Millisecond}
+		}
+	}
+	if v := os.Getenv("MULTI_WARP_UNIQUE_RECHECK_MS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			c.Uniqueness.RecheckEvery = Duration{time.Duration(n) * time.Millisecond}
+		}
+	}
+	if v := os.Getenv("MULTI_WARP_UNIQUE_RECHECK_MAX"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			c.Uniqueness.RecheckMax = n
+		}
 	}
 	if v := os.Getenv("RUST_LOG"); v != "" {
 		c.Logging.Level = v
