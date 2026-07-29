@@ -7,14 +7,19 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/autoclaw/go-multi-warp/internal/pool"
 	"go.uber.org/zap"
 )
 
 type Socks5Server struct {
-	state *State
-	log   *zap.Logger
+	state       *State
+	log         *zap.Logger
+	activeConns atomic.Int64
+	drainWg     sync.WaitGroup
 }
 
 func NewSocks5Server(state *State, log *zap.Logger) *Socks5Server {
@@ -32,7 +37,7 @@ func (s *Socks5Server) Serve(ctx context.Context) error {
 	}
 	s.log.Info("SOCKS5 listening", zap.String("addr", s.state.Cfg.Listen.Socks5))
 
-	// graceful shutdown
+	// Graceful shutdown: stop accepting, drain active connections
 	go func() {
 		<-ctx.Done()
 		ln.Close()
@@ -42,13 +47,42 @@ func (s *Socks5Server) Serve(ctx context.Context) error {
 		conn, err := ln.Accept()
 		if err != nil {
 			if errors.Is(err, net.ErrClosed) {
+				// Listener closed — drain remaining active connections
+				s.drain(ctx)
 				return nil
 			}
 			s.log.Warn("socks accept error", zap.Error(err))
 			continue
 		}
-		go s.handle(ctx, conn)
+		s.activeConns.Add(1)
+		go func() {
+			defer s.activeConns.Add(-1)
+			s.handle(ctx, conn)
+		}()
 	}
+}
+
+// drain waits for active connections to finish (up to timeout).
+func (s *Socks5Server) drain(ctx context.Context) {
+	drainTimeout := s.state.Cfg.Control.DrainTimeout.Duration
+	if drainTimeout <= 0 {
+		drainTimeout = 30 * time.Second
+	}
+	deadline := time.After(drainTimeout)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for s.activeConns.Load() > 0 {
+		select {
+		case <-deadline:
+			s.log.Warn("drain timeout, forcing close",
+				zap.Int64("remaining_conns", s.activeConns.Load()))
+			return
+		case <-ticker.C:
+			// keep waiting
+		}
+	}
+	s.log.Info("all SOCKS5 connections drained")
 }
 
 func (s *Socks5Server) handle(ctx context.Context, conn net.Conn) {
@@ -160,7 +194,7 @@ func (s *Socks5Server) handle(ctx context.Context, conn net.Conn) {
 	conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 
 	// bidirectional copy
-	_, _ = CopyBidirectional(conn, upstream, s.state.Cfg.Limits.IOTimeout.Duration)
+	_, _ = CopyBidirectional(conn, upstream, s.state.Cfg.Limits.IOTimeout.Duration, false)
 }
 
 func containsMethod(methods []byte, m byte) bool {

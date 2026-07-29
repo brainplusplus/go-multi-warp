@@ -37,6 +37,7 @@ control:
   start_stagger_ms: 3000
   reconnect_after_fails: 2
   hard_restart_after_fails: 6
+  drain_timeout_ms: 30000
   license_keys: []
   data_root: "/var/lib/cloudflare-warp"
   runtime_root: "/run/multi-warp"

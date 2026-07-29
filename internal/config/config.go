@@ -93,11 +93,12 @@ type Limits struct {
 type Control struct {
 	// WarpConnTimeout is in seconds when loaded from yaml integer (see UnmarshalYAML seconds helper).
 	WarpConnTimeout  DurationSec `yaml:"warp_connect_timeout_sec"`
-	StartStagger     Duration `yaml:"start_stagger_ms"`
-	ReconnectFails   int      `yaml:"reconnect_after_fails"`
-	HardRestartFails int      `yaml:"hard_restart_after_fails"`
-	LicenseKeys      []string `yaml:"license_keys"`
-	Org              string   `yaml:"org"`
+	StartStagger     Duration    `yaml:"start_stagger_ms"`
+	ReconnectFails   int         `yaml:"reconnect_after_fails"`
+	HardRestartFails int         `yaml:"hard_restart_after_fails"`
+	LicenseKeys      []string    `yaml:"license_keys"`
+	Org              string      `yaml:"org"`
+	DrainTimeout     Duration    `yaml:"drain_timeout_ms"`
 	AuthClientID     string   `yaml:"auth_client_id"`
 	AuthClientSecret string   `yaml:"auth_client_secret"`
 	DataRoot         string   `yaml:"data_root"`
@@ -191,6 +192,7 @@ func Default() Config {
 			HardRestartFails: 6,
 			DataRoot:         defaultDataRoot(),
 			RuntimeRoot:      filepath.Join(os.TempDir(), "go-multi-warp"),
+			DrainTimeout:     Duration{30 * time.Second},
 		},
 		Uniqueness: Uniqueness{
 			Enabled:          true,

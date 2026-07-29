@@ -130,28 +130,63 @@ func connectSOCKS5(ctx context.Context, proxyAddr, host string, port int, timeou
 	return conn, nil
 }
 
-// CopyBidirectional streams both directions until either side closes or timeout.
-func CopyBidirectional(a, b net.Conn, timeout time.Duration) (int64, int64) {
+// CopyBidirectional streams both directions until either side closes or idle timeout.
+// Uses idle timeout (not absolute): timer resets on every byte transferred.
+// Proper half-close: when one side finishes, only shutdown that direction.
+// Supports streaming detection: if isStreaming, uses extended idle timeout.
+func CopyBidirectional(a, b net.Conn, idleTimeout time.Duration, isStreaming bool) (int64, int64) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	var upBytes, downBytes int64
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	// Use extended timeout for streaming connections
+	if isStreaming && idleTimeout < 5*time.Minute {
+		idleTimeout = 5 * time.Minute
+	}
+
+	// Channel to signal idle timer reset
+	reset := make(chan struct{}, 2)
+
+	// idle timer goroutine
+	timerDone := make(chan struct{})
+	go func() {
+		timer := time.NewTimer(idleTimeout)
+		defer timer.Stop()
+		for {
+			select {
+			case <-reset:
+				if !timer.Stop() {
+					<-timer.C
+				}
+				timer.Reset(idleTimeout)
+			case <-timer.C:
+				a.Close()
+				b.Close()
+				return
+			case <-timerDone:
+				return
+			}
+		}
+	}()
 
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(b, a)
+		// Use a wrapper that signals activity on each read
+		n, _ := io.Copy(b, &activityReader{r: a, reset: reset})
 		downBytes = n
-		// signal other side to stop reading
+		// Proper half-close: only shutdown write side of b
+		// Do NOT close a — let the other goroutine finish reading from b
 		if tcp, ok := b.(*net.TCPConn); ok {
 			tcp.CloseWrite()
 		}
 	}()
+
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(a, b)
+		n, _ := io.Copy(a, &activityReader{r: b, reset: reset})
 		upBytes = n
+		// Proper half-close: only shutdown write side of a
+		// Do NOT close b — let the other goroutine finish reading from a
 		if tcp, ok := a.(*net.TCPConn); ok {
 			tcp.CloseWrite()
 		}
@@ -160,17 +195,29 @@ func CopyBidirectional(a, b net.Conn, timeout time.Duration) (int64, int64) {
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
+		close(timerDone)
 		close(done)
 	}()
 
-	select {
-	case <-done:
-		return upBytes, downBytes
-	case <-ctx.Done():
-		a.Close()
-		b.Close()
-		return upBytes, downBytes
+	<-done
+	return upBytes, downBytes
+}
+
+// activityReader wraps a reader and signals activity on every read.
+type activityReader struct {
+	r     io.Reader
+	reset chan<- struct{}
+}
+
+func (ar *activityReader) Read(p []byte) (int, error) {
+	n, err := ar.r.Read(p)
+	if n > 0 {
+		select {
+		case ar.reset <- struct{}{}:
+		default:
+		}
 	}
+	return n, err
 }
 
 // readSocksAddr parses a SOCKS address (IPv4, IPv6, or domain).
