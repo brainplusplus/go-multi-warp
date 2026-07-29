@@ -332,6 +332,9 @@ type ipState struct {
 	conns  atomic.Int64
 	tokens atomic.Int64
 	lastAt atomic.Int64 // unixnano
+	// tokensLock serialises token-bucket mutation so concurrent goroutines
+	// never race on tokens/lastAt. The conn counter stays lock-free.
+	mu sync.Mutex
 }
 
 func NewConnLimiter(maxGlobal, maxPerIP, maxRPS int) *ConnLimiter {
@@ -371,26 +374,26 @@ func (cl *ConnLimiter) Acquire(peer net.Addr) (*ConnLease, error) {
 	}
 
 	// RPS token bucket: refill based on elapsed time, cost 1 token per request.
+	// Serialised via per-IP mutex — race-free under any concurrency.
 	if cl.maxRPS > 0 {
+		st.mu.Lock()
 		now := time.Now().UnixNano()
-		for {
-			last := st.lastAt.Load()
-			elapsed := time.Duration(now - last)
-			add := int64(elapsed.Seconds() * float64(cl.maxRPS))
-			tokens := st.tokens.Load() + add
-			if tokens > cl.maxRPS {
-				tokens = cl.maxRPS
-			}
-			if tokens < 1 {
-				st.conns.Add(-1)
-				cl.global.Add(-1)
-				return nil, ErrPerIPRPSLimit
-			}
-			if st.tokens.CompareAndSwap(st.tokens.Load(), tokens-1) {
-				st.lastAt.CompareAndSwap(last, now)
-				break
-			}
+		last := st.lastAt.Load()
+		elapsed := time.Duration(now - last)
+		add := int64(elapsed.Seconds() * float64(cl.maxRPS))
+		tokens := st.tokens.Load() + add
+		if tokens > cl.maxRPS {
+			tokens = cl.maxRPS
 		}
+		if tokens < 1 {
+			st.mu.Unlock()
+			st.conns.Add(-1)
+			cl.global.Add(-1)
+			return nil, ErrPerIPRPSLimit
+		}
+		st.tokens.Store(tokens - 1)
+		st.lastAt.Store(now)
+		st.mu.Unlock()
 	}
 
 	return &ConnLease{limiter: cl, ip: ip}, nil
