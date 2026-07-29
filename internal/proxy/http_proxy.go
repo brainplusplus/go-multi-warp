@@ -145,7 +145,7 @@ func (s *HTTPProxyServer) handleConnect(ctx context.Context, conn net.Conn, req 
 
 	// CONNECT tunneling: pass isStreaming=true — we don't know yet if the
 	// inner connection is SSE, but we must not kill long-lived tunnels.
-	_, _ = CopyBidirectional(conn, upstream, s.state.Cfg.Limits.IOTimeout.Duration, true)
+	_, _ = CopyBidirectional(conn, upstream, s.state.Cfg.Limits.IOTimeout.Duration, true, s.state.Cfg.Streaming.MaxStreamDuration.Duration)
 }
 
 func (s *HTTPProxyServer) handlePlain(ctx context.Context, conn net.Conn, req *http.Request, br *bufio.Reader, sticky uint64) {
@@ -212,8 +212,8 @@ func (s *HTTPProxyServer) handlePlain(ctx context.Context, conn net.Conn, req *h
 	isStreaming := strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream")
 
 	// Stream body directly — no buffering, pipe as chunks arrive.
-	// Use idle timeout from config, auto-extended for SSE via CopyBidirectional.
-	_, _ = CopyBidirectional(conn, &bodyWrapper{resp.Body, upstream}, s.state.Cfg.Limits.IOTimeout.Duration, isStreaming)
+	// Use idle timeout from streaming config (falls back to limits), auto-extended for SSE.
+	_, _ = CopyBidirectional(conn, &bodyWrapper{resp.Body, upstream}, s.state.Cfg.Streaming.IdleTimeout.Duration, isStreaming, s.state.Cfg.Streaming.MaxStreamDuration.Duration)
 }
 
 // bodyWrapper adapts http.Response.Body to net.Conn for CopyBidirectional.

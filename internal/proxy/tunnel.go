@@ -131,63 +131,49 @@ func connectSOCKS5(ctx context.Context, proxyAddr, host string, port int, timeou
 }
 
 // CopyBidirectional streams both directions until either side closes or idle timeout.
-// Uses idle timeout (not absolute): timer resets on every byte transferred.
+// Uses deadline-based idle timeout (resets on every byte transferred via Read).
 // Proper half-close: when one side finishes, only shutdown that direction.
-// Supports streaming detection: if isStreaming, uses extended idle timeout.
-func CopyBidirectional(a, b net.Conn, idleTimeout time.Duration, isStreaming bool) (int64, int64) {
+// Supports streaming detection: if isStreaming, uses extended idle timeout and
+// optional absolute lifetime cap (maxDuration).
+func CopyBidirectional(a, b net.Conn, idleTimeout time.Duration, isStreaming bool, maxDuration time.Duration) (int64, int64) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 	var upBytes, downBytes int64
 
-	// Use extended timeout for streaming connections
+	// Resolve effective idle timeout.
 	if isStreaming && idleTimeout < 5*time.Minute {
 		idleTimeout = 5 * time.Minute
 	}
+	if idleTimeout <= 0 {
+		idleTimeout = 2 * time.Minute // sane default
+	}
 
-	// Channel to signal idle timer reset
-	reset := make(chan struct{}, 2)
+	// Optional absolute cap for streaming connections.
+	if isStreaming && maxDuration > 0 {
+		time.AfterFunc(maxDuration, func() {
+			a.Close()
+			b.Close()
+		})
+	}
 
-	// idle timer goroutine
-	timerDone := make(chan struct{})
-	go func() {
-		timer := time.NewTimer(idleTimeout)
-		defer timer.Stop()
-		for {
-			select {
-			case <-reset:
-				if !timer.Stop() {
-					<-timer.C
-				}
-				timer.Reset(idleTimeout)
-			case <-timer.C:
-				a.Close()
-				b.Close()
-				return
-			case <-timerDone:
-				return
-			}
-		}
-	}()
+	// deadline-based idle timeout: reset via SetDeadline in the reader wrappers.
+	a = &idleConn{Conn: a, idle: idleTimeout}
+	b = &idleConn{Conn: b, idle: idleTimeout}
 
 	go func() {
 		defer wg.Done()
-		// Use a wrapper that signals activity on each read
-		n, _ := io.Copy(b, &activityReader{r: a, reset: reset})
+		n, _ := io.Copy(b, a)
 		downBytes = n
-		// Proper half-close: only shutdown write side of b
-		// Do NOT close a — let the other goroutine finish reading from b
-		if tcp, ok := b.(*net.TCPConn); ok {
+		if tcp, ok := b.(*idleConn).Conn.(*net.TCPConn); ok {
 			tcp.CloseWrite()
 		}
 	}()
 
 	go func() {
 		defer wg.Done()
-		n, _ := io.Copy(a, &activityReader{r: b, reset: reset})
+		n, _ := io.Copy(a, b)
 		upBytes = n
-		// Proper half-close: only shutdown write side of a
-		// Do NOT close b — let the other goroutine finish reading from a
-		if tcp, ok := a.(*net.TCPConn); ok {
+		if tcp, ok := a.(*idleConn).Conn.(*net.TCPConn); ok {
 			tcp.CloseWrite()
 		}
 	}()
@@ -195,7 +181,6 @@ func CopyBidirectional(a, b net.Conn, idleTimeout time.Duration, isStreaming boo
 	done := make(chan struct{})
 	go func() {
 		wg.Wait()
-		close(timerDone)
 		close(done)
 	}()
 
@@ -203,21 +188,26 @@ func CopyBidirectional(a, b net.Conn, idleTimeout time.Duration, isStreaming boo
 	return upBytes, downBytes
 }
 
-// activityReader wraps a reader and signals activity on every read.
-type activityReader struct {
-	r     io.Reader
-	reset chan<- struct{}
+// idleConn wraps a net.Conn and resets the read/write deadline on every Read/Write
+// so the connection dies only after `idle` of no activity in EITHER direction.
+type idleConn struct {
+	net.Conn
+	idle time.Duration
 }
 
-func (ar *activityReader) Read(p []byte) (int, error) {
-	n, err := ar.r.Read(p)
+func (c *idleConn) Read(p []byte) (int, error) {
+	_ = c.Conn.SetReadDeadline(time.Now().Add(c.idle))
+	n, err := c.Conn.Read(p)
 	if n > 0 {
-		select {
-		case ar.reset <- struct{}{}:
-		default:
-		}
+		// Also reset write deadline — activity on either side keeps the tunnel alive.
+		_ = c.Conn.SetWriteDeadline(time.Now().Add(c.idle))
 	}
 	return n, err
+}
+
+func (c *idleConn) Write(p []byte) (int, error) {
+	_ = c.Conn.SetWriteDeadline(time.Now().Add(c.idle))
+	return c.Conn.Write(p)
 }
 
 // readSocksAddr parses a SOCKS address (IPv4, IPv6, or domain).

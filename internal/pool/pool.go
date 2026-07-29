@@ -15,6 +15,7 @@ var (
 	ErrNoHealthyBackend = errors.New("no healthy WARP backend available")
 	ErrGlobalConnLimit  = errors.New("global connection limit reached")
 	ErrPerIPConnLimit   = errors.New("per-ip connection limit reached")
+	ErrPerIPRPSLimit    = errors.New("per-ip rate limit exceeded")
 )
 
 type Metrics struct {
@@ -318,17 +319,26 @@ func (p *Pool) AdmitStats() (inPool, warming, parked int, uniqueIPs int) {
 }
 
 // ConnLimiter tracks global + per-IP counters with acquire/release semantics.
+// Also enforces a per-IP request-per-second token bucket when maxRPS > 0.
 type ConnLimiter struct {
 	global    atomic.Int64
 	maxGlobal int64
 	maxPerIP  int64
-	perIP     sync.Map // string IP -> *atomic.Int64
+	maxRPS    int64
+	perIP     sync.Map // string IP -> *ipState
 }
 
-func NewConnLimiter(maxGlobal, maxPerIP int) *ConnLimiter {
+type ipState struct {
+	conns  atomic.Int64
+	tokens atomic.Int64
+	lastAt atomic.Int64 // unixnano
+}
+
+func NewConnLimiter(maxGlobal, maxPerIP, maxRPS int) *ConnLimiter {
 	return &ConnLimiter{
 		maxGlobal: int64(maxGlobal),
 		maxPerIP:  int64(maxPerIP),
+		maxRPS:    int64(maxRPS),
 	}
 }
 
@@ -345,19 +355,42 @@ func (cl *ConnLimiter) Acquire(peer net.Addr) (*ConnLease, error) {
 		return &ConnLease{limiter: cl, ip: ""}, nil
 	}
 
-	var counter *atomic.Int64
+	var st *ipState
 	if v, ok := cl.perIP.Load(ip); ok {
-		counter = v.(*atomic.Int64)
+		st = v.(*ipState)
 	} else {
-		counter = &atomic.Int64{}
-		actual, _ := cl.perIP.LoadOrStore(ip, counter)
-		counter = actual.(*atomic.Int64)
+		st = &ipState{}
+		actual, _ := cl.perIP.LoadOrStore(ip, st)
+		st = actual.(*ipState)
 	}
-	n := counter.Add(1)
+	n := st.conns.Add(1)
 	if cl.maxPerIP > 0 && n > cl.maxPerIP {
-		counter.Add(-1)
+		st.conns.Add(-1)
 		cl.global.Add(-1)
 		return nil, ErrPerIPConnLimit
+	}
+
+	// RPS token bucket: refill based on elapsed time, cost 1 token per request.
+	if cl.maxRPS > 0 {
+		now := time.Now().UnixNano()
+		for {
+			last := st.lastAt.Load()
+			elapsed := time.Duration(now - last)
+			add := int64(elapsed.Seconds() * float64(cl.maxRPS))
+			tokens := st.tokens.Load() + add
+			if tokens > cl.maxRPS {
+				tokens = cl.maxRPS
+			}
+			if tokens < 1 {
+				st.conns.Add(-1)
+				cl.global.Add(-1)
+				return nil, ErrPerIPRPSLimit
+			}
+			if st.tokens.CompareAndSwap(st.tokens.Load(), tokens-1) {
+				st.lastAt.CompareAndSwap(last, now)
+				break
+			}
+		}
 	}
 
 	return &ConnLease{limiter: cl, ip: ip}, nil
@@ -377,7 +410,7 @@ func (cl *ConnLease) Release() {
 		return
 	}
 	if v, ok := cl.limiter.perIP.Load(cl.ip); ok {
-		v.(*atomic.Int64).Add(-1)
+		v.(*ipState).conns.Add(-1)
 	}
 }
 

@@ -194,7 +194,7 @@ func (s *Socks5Server) handle(ctx context.Context, conn net.Conn) {
 	conn.Write([]byte{0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00})
 
 	// bidirectional copy
-	_, _ = CopyBidirectional(conn, upstream, s.state.Cfg.Limits.IOTimeout.Duration, false)
+	_, _ = CopyBidirectional(conn, upstream, s.state.Cfg.Limits.IOTimeout.Duration, false, 0)
 }
 
 func containsMethod(methods []byte, m byte) bool {

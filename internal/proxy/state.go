@@ -25,7 +25,7 @@ type State struct {
 }
 
 func NewState(cfg *config.Config, p *pool.Pool) *State {
-	limiter := pool.NewConnLimiter(cfg.Limits.MaxConnGlobal, cfg.Limits.MaxConnPerIP)
+	limiter := pool.NewConnLimiter(cfg.Limits.MaxConnGlobal, cfg.Limits.MaxConnPerIP, cfg.Limits.MaxRPSPerIP)
 	auth := NewProxyAuth(cfg.Auth.Username, cfg.Auth.Password)
 	return &State{
 		Pool:    p,

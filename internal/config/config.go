@@ -41,6 +41,8 @@ type Config struct {
 	RequireWarp  bool       `yaml:"probe_require_warp"`
 	Pool         Pool       `yaml:"pool"`
 	Limits       Limits     `yaml:"limits"`
+	Streaming    Streaming  `yaml:"streaming"`
+	HTTP2        HTTP2      `yaml:"http2"`
 	Control      Control    `yaml:"control"`
 	Uniqueness   Uniqueness `yaml:"uniqueness"`
 	Logging      Logging    `yaml:"logging"`
@@ -88,6 +90,21 @@ type Limits struct {
 	MaxRPSPerIP   int      `yaml:"max_rps_per_ip"`
 	DialTimeout   Duration `yaml:"dial_timeout_ms"`
 	IOTimeout     Duration `yaml:"io_timeout_ms"`
+}
+
+type Streaming struct {
+	// IdleTimeout overrides limits.io_timeout_ms for SSE/streaming connections.
+	// If <= 0, falls back to limits.io_timeout_ms, then a 5-minute floor.
+	IdleTimeout      Duration `yaml:"idle_timeout_ms"`
+	// MaxStreamDuration is the absolute lifetime cap for any streaming connection.
+	// 0 = no cap (idle timeout only).
+	MaxStreamDuration Duration `yaml:"max_stream_duration_ms"`
+}
+
+type HTTP2 struct {
+	// Enabled activates h2c (HTTP/2 cleartext) on the admin listener.
+	// Data-plane proxy listeners remain HTTP/1.1 CONNECT-aware.
+	Enabled bool `yaml:"enabled"`
 }
 
 type Control struct {
@@ -184,6 +201,13 @@ func Default() Config {
 			MaxConnPerIP:  500,
 			DialTimeout:   Duration{8 * time.Second},
 			IOTimeout:     Duration{2 * time.Minute},
+		},
+		Streaming: Streaming{
+			IdleTimeout:       Duration{5 * time.Minute},
+			MaxStreamDuration: Duration{0},
+		},
+		HTTP2: HTTP2{
+			Enabled: true,
 		},
 		Control: Control{
 			WarpConnTimeout:  DurationSec{60 * time.Second},
@@ -328,6 +352,24 @@ func (c *Config) applyEnv() {
 			c.Pool.Strategy = StrategyLeastConn
 		case "sticky":
 			c.Pool.Strategy = StrategySticky
+		}
+	}
+	if v := os.Getenv("MULTI_WARP_STREAM_IDLE_TIMEOUT_MS"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			c.Streaming.IdleTimeout = Duration{time.Duration(n) * time.Millisecond}
+		}
+	}
+	if v := os.Getenv("MULTI_WARP_STREAM_MAX_DURATION_MS"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 {
+			c.Streaming.MaxStreamDuration = Duration{time.Duration(n) * time.Millisecond}
+		}
+	}
+	if v := os.Getenv("MULTI_WARP_HTTP2_ENABLED"); v != "" {
+		c.HTTP2.Enabled = parseBool(v, c.HTTP2.Enabled)
+	}
+	if v := os.Getenv("MULTI_WARP_DRAIN_TIMEOUT_MS"); v != "" {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n > 0 {
+			c.Control.DrainTimeout = Duration{time.Duration(n) * time.Millisecond}
 		}
 	}
 	if v := os.Getenv("MULTI_WARP_FORCE_REREGISTER"); v != "" {

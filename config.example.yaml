@@ -32,6 +32,16 @@ limits:
   dial_timeout_ms: 8000
   io_timeout_ms: 120000
 
+streaming:
+  # Idle timeout for SSE/streaming connections (0 = use limits.io_timeout_ms)
+  idle_timeout_ms: 300000
+  # Absolute lifetime cap for any streaming connection (0 = no cap)
+  max_stream_duration_ms: 0
+
+http2:
+  # h2c (HTTP/2 cleartext) on admin listener for multiplexed dashboards/metrics
+  enabled: true
+
 control:
   warp_connect_timeout_sec: 60
   start_stagger_ms: 3000

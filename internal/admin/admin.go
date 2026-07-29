@@ -3,15 +3,19 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/autoclaw/go-multi-warp/internal/config"
 	"github.com/autoclaw/go-multi-warp/internal/pool"
 	"github.com/autoclaw/go-multi-warp/internal/proxy"
 	"go.uber.org/zap"
+	"golang.org/x/net/http2"
+	"golang.org/x/net/http2/h2c"
 )
 
 type State struct {
@@ -72,6 +76,7 @@ func (s *State) Handler() http.Handler {
 	mux.HandleFunc("/healthz", s.healthz)
 	mux.HandleFunc("/readyz", s.readyz)
 	mux.HandleFunc("/metrics", s.metrics)
+	mux.HandleFunc("/metrics/prom", s.prometheus)
 	mux.HandleFunc("/backends", s.backends)
 	mux.HandleFunc("/v1/reconnect/", s.reconnect)
 	return mux
@@ -146,6 +151,103 @@ func (s *State) metrics(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// prometheus exposes metrics in Prometheus text exposition format.
+func (s *State) prometheus(w http.ResponseWriter, r *http.Request) {
+	var b strings.Builder
+	m := s.Pool.Metrics()
+	healthy := s.Pool.HealthyCount()
+	inPool, warming, parked, uniqueIPs := s.Pool.AdmitStats()
+	total := len(s.Pool.Backends())
+
+	b.WriteString("# HELP multiwarp_up 1 if the proxy is running\n")
+	b.WriteString("# TYPE multiwarp_up gauge\n")
+	b.WriteString("multiwarp_up 1\n")
+
+	b.WriteString("# HELP multiwarp_uptime_seconds Uptime in seconds\n")
+	b.WriteString("# TYPE multiwarp_uptime_seconds counter\n")
+	b.WriteString(fmt.Sprintf("multiwarp_uptime_seconds %d\n", int64(time.Since(s.Started).Seconds())))
+
+	b.WriteString("# HELP multiwarp_backends_total Total configured backends\n")
+	b.WriteString("# TYPE multiwarp_backends_total gauge\n")
+	b.WriteString(fmt.Sprintf("multiwarp_backends_total %d\n", total))
+
+	b.WriteString("# HELP multiwarp_backends_healthy Healthy selectable backends\n")
+	b.WriteString("# TYPE multiwarp_backends_healthy gauge\n")
+	b.WriteString(fmt.Sprintf("multiwarp_backends_healthy %d\n", healthy))
+
+	b.WriteString("# HELP multiwarp_backends_in_pool Backends admitted to selector\n")
+	b.WriteString("# TYPE multiwarp_backends_in_pool gauge\n")
+	b.WriteString(fmt.Sprintf("multiwarp_backends_in_pool %d\n", inPool))
+
+	b.WriteString("# HELP multiwarp_backends_warming Backends still warming\n")
+	b.WriteString("# TYPE multiwarp_backends_warming gauge\n")
+	b.WriteString(fmt.Sprintf("multiwarp_backends_warming %d\n", warming))
+
+	b.WriteString("# HELP multiwarp_backends_parked Backends parked (uniqueness strict)\n")
+	b.WriteString("# TYPE multiwarp_backends_parked gauge\n")
+	b.WriteString(fmt.Sprintf("multiwarp_backends_parked %d\n", parked))
+
+	b.WriteString("# HELP multiwarp_unique_ipv4 Unique egress IPv4 count\n")
+	b.WriteString("# TYPE multiwarp_unique_ipv4 gauge\n")
+	b.WriteString(fmt.Sprintf("multiwarp_unique_ipv4 %d\n", uniqueIPs))
+
+	b.WriteString("# HELP multiwarp_active_connections Current active data-plane connections\n")
+	b.WriteString("# TYPE multiwarp_active_connections gauge\n")
+	b.WriteString(fmt.Sprintf("multiwarp_active_connections %d\n", s.Proxy.Limiter.Active()))
+
+	b.WriteString("# HELP multiwarp_selects_total Backend select attempts\n")
+	b.WriteString("# TYPE multiwarp_selects_total counter\n")
+	b.WriteString(fmt.Sprintf("multiwarp_selects_total %d\n", m.Selects.Load()))
+
+	b.WriteString("# HELP multiwarp_select_fail_total Backend select failures\n")
+	b.WriteString("# TYPE multiwarp_select_fail_total counter\n")
+	b.WriteString(fmt.Sprintf("multiwarp_select_fail_total %d\n", m.SelectFail.Load()))
+
+	b.WriteString("# HELP multiwarp_probe_success_total Health probe successes\n")
+	b.WriteString("# TYPE multiwarp_probe_success_total counter\n")
+	b.WriteString(fmt.Sprintf("multiwarp_probe_success_total %d\n", m.Success.Load()))
+
+	b.WriteString("# HELP multiwarp_probe_failure_total Health probe failures\n")
+	b.WriteString("# TYPE multiwarp_probe_failure_total counter\n")
+	b.WriteString(fmt.Sprintf("multiwarp_probe_failure_total %d\n", m.Failure.Load()))
+
+	// Per-backend metrics
+	b.WriteString("# HELP multiwarp_backend_inflight Current in-flight requests per backend\n")
+	b.WriteString("# TYPE multiwarp_backend_inflight gauge\n")
+	for _, snap := range s.Pool.Snapshots() {
+		b.WriteString(fmt.Sprintf("multiwarp_backend_inflight{id=\"%d\",addr=\"%s\"} %d\n", snap.ID, snap.Addr, snap.Inflight))
+	}
+
+	b.WriteString("# HELP multiwarp_backend_fails Consecutive fail count per backend\n")
+	b.WriteString("# TYPE multiwarp_backend_fails gauge\n")
+	for _, snap := range s.Pool.Snapshots() {
+		b.WriteString(fmt.Sprintf("multiwarp_backend_fails{id=\"%d\",addr=\"%s\"} %d\n", snap.ID, snap.Addr, snap.Fails))
+	}
+
+	b.WriteString("# HELP multiwarp_backend_latency_ms Last probe latency per backend\n")
+	b.WriteString("# TYPE multiwarp_backend_latency_ms gauge\n")
+	for _, snap := range s.Pool.Snapshots() {
+		if snap.LastProbe != nil {
+			b.WriteString(fmt.Sprintf("multiwarp_backend_latency_ms{id=\"%d\",addr=\"%s\"} %d\n", snap.ID, snap.Addr, snap.LastProbe.LatencyMS))
+		}
+	}
+
+	b.WriteString("# HELP multiwarp_backend_success_total Total successful upstream dials per backend\n")
+	b.WriteString("# TYPE multiwarp_backend_success_total counter\n")
+	for _, snap := range s.Pool.Snapshots() {
+		b.WriteString(fmt.Sprintf("multiwarp_backend_success_total{id=\"%d\",addr=\"%s\"} %d\n", snap.ID, snap.Addr, snap.SuccessTotal))
+	}
+
+	b.WriteString("# HELP multiwarp_backend_fail_total Total failed upstream dials per backend\n")
+	b.WriteString("# TYPE multiwarp_backend_fail_total counter\n")
+	for _, snap := range s.Pool.Snapshots() {
+		b.WriteString(fmt.Sprintf("multiwarp_backend_fail_total{id=\"%d\",addr=\"%s\"} %d\n", snap.ID, snap.Addr, snap.FailTotal))
+	}
+
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+	w.Write([]byte(b.String()))
+}
+
 func (s *State) backends(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(s.Pool.Snapshots())
 }
@@ -194,8 +296,17 @@ func (s *State) Serve(ctx context.Context) error {
 		ln.Close()
 	}()
 
+	handler := s.Handler()
+	if s.Cfg.HTTP2.Enabled {
+		// h2c: HTTP/2 cleartext for admin API — enables multiplexed streams for
+		// dashboards/metrics scrapers without TLS overhead on localhost.
+		h2s := &http2.Server{}
+		handler = h2c.NewHandler(handler, h2s)
+		s.Log.Info("admin API h2c (HTTP/2 cleartext) enabled")
+	}
+
 	srv := &http.Server{
-		Handler: s.Handler(),
+		Handler: handler,
 	}
 	go func() {
 		<-ctx.Done()
