@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/autoclaw/go-multi-warp/internal/pool"
+	"github.com/brainplusplus/go-multi-warp/internal/pool"
 )
 
 // DialViaSocks dials target through a selected WARP SOCKS5 backend.

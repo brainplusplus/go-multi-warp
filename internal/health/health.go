@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/autoclaw/go-multi-warp/internal/config"
-	"github.com/autoclaw/go-multi-warp/internal/pool"
+	"github.com/brainplusplus/go-multi-warp/internal/config"
+	"github.com/brainplusplus/go-multi-warp/internal/pool"
 	"go.uber.org/zap"
 	"golang.org/x/net/proxy"
 )

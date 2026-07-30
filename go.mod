@@ -1,4 +1,4 @@
-module github.com/autoclaw/go-multi-warp
+module github.com/brainplusplus/go-multi-warp
 
 go 1.26
 

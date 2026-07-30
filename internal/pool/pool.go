@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/autoclaw/go-multi-warp/internal/config"
+	"github.com/brainplusplus/go-multi-warp/internal/config"
 )
 
 var (

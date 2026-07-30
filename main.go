@@ -9,12 +9,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/autoclaw/go-multi-warp/internal/admin"
-	"github.com/autoclaw/go-multi-warp/internal/config"
-	"github.com/autoclaw/go-multi-warp/internal/control"
-	"github.com/autoclaw/go-multi-warp/internal/health"
-	"github.com/autoclaw/go-multi-warp/internal/pool"
-	"github.com/autoclaw/go-multi-warp/internal/proxy"
+	"github.com/brainplusplus/go-multi-warp/internal/admin"
+	"github.com/brainplusplus/go-multi-warp/internal/config"
+	"github.com/brainplusplus/go-multi-warp/internal/control"
+	"github.com/brainplusplus/go-multi-warp/internal/health"
+	"github.com/brainplusplus/go-multi-warp/internal/pool"
+	"github.com/brainplusplus/go-multi-warp/internal/proxy"
 	"go.uber.org/zap"
 )
 
